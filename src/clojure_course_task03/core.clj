@@ -1,5 +1,7 @@
 (ns clojure-course-task03.core
-  (:require [clojure.set]))
+  (:require [clojure.set])
+  (:require [clojure.string :as string])
+  (:use [clojure.pprint]))
 
 (defn join* [table-name conds]
   (let [op (first conds)
@@ -205,6 +207,42 @@
 ;; TBD: Implement the following macros
 ;;
 
+(defn unwrap [& r]
+  (let [make (fn [a b c & other] (println a))]
+    (loop [tail r]
+      (println "tail" tail)
+      (when (not (empty? tail))
+                                        ;(apply make tail)
+        (println "iteration" tail)
+        (apply make tail)
+        (recur (drop 3 tail))))))
+
+(unwrap "first" "a" "1" "second" "b" "2" "third" "c" "3")
+
+(defmacro unwrap-body [& args]
+  (let [make (fn [a b c & other]
+               (let [full-name (symbol (str "select-agent-" a))]
+                 (println "full name" full-name)
+                 `(do (defn ~full-name [] "select1-yay"))))]
+    (loop [tail args]
+     ;; (println "tail" tail)
+      (when (not (empty? tail))
+        ;;(println "iteration" tail)
+        (apply make tail)
+        (recur (drop 3 tail))))))
+
+(macroexpand-1 '(unwrap-body proposal -> [:person, :phone]))
+
+(defmacro test1 [name1 name2]
+  (let [make (fn [n]
+               `(defn ~(symbol (str "mc-test1-" n)) [] (println ~(str "hey " n))))]
+    ;;(make name1)
+    `(do ~(make name1)
+         ~(make name2))))
+  ;;`(do (defn ~(symbol (str "mc-test1-" name)) [] (println "hey"))))
+
+(unwrap-body proposal -> [:person, :phone])
+
 (defmacro group [name & body]
   ;; Пример
   ;; (group Agent
@@ -216,7 +254,34 @@
   ;; 3) Создает следующие функции
   ;;    (select-agent-proposal) ;; select person, phone, address, price from proposal;
   ;;    (select-agent-agents)  ;; select clients_id, proposal_id, agent from agents;
+  (let [group-name (string/lower-case name)
+        select-functions (ref '(do))
+        add-table-fields (fn [sym-table arrow sym-fields & other]
+                           (let [table (str sym-table)
+                                 fields (map keyword sym-fields)]
+                             (def group-table-field)
+                             (if (bound? #'group-table-field)
+                               (do (println "var exists")
+                                   (def group-table-field (assoc-in group-table-field [group-name table] fields)))
+                               (do (println "creating new")
+                                   (def group-table-field {group-name {table fields}})))
+                             `(defn ~(symbol (str "select-" group-name "-" table)) []
+                                (let [~(symbol (str table "-fields-var")) ~fields]
+                                  (select ~sym-table (~(symbol "fields") ~@fields))))))]
+    (loop [args body]
+      (when (not (empty? args))
+        (dosync
+         (alter select-functions
+                #(cons %2 %1)
+                (apply add-table-fields args)))
+        (recur (drop 3 args))))
+    (pprint (reverse @select-functions)))
   )
+
+  (group Agent
+         proposal -> [person, phone, address, price]
+         agents -> [clients_id, proposal_id, agent])
+
 
 (defmacro user [name & body]
   ;; Пример
