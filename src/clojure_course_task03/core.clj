@@ -113,7 +113,6 @@
           (limit 5)
           (offset 5)))
 
-
 (comment
   ;; Описание и примеры использования DSL
   ;; ------------------------------------
@@ -207,42 +206,6 @@
 ;; TBD: Implement the following macros
 ;;
 
-(defn unwrap [& r]
-  (let [make (fn [a b c & other] (println a))]
-    (loop [tail r]
-      (println "tail" tail)
-      (when (not (empty? tail))
-                                        ;(apply make tail)
-        (println "iteration" tail)
-        (apply make tail)
-        (recur (drop 3 tail))))))
-
-(unwrap "first" "a" "1" "second" "b" "2" "third" "c" "3")
-
-(defmacro unwrap-body [& args]
-  (let [make (fn [a b c & other]
-               (let [full-name (symbol (str "select-agent-" a))]
-                 (println "full name" full-name)
-                 `(do (defn ~full-name [] "select1-yay"))))]
-    (loop [tail args]
-     ;; (println "tail" tail)
-      (when (not (empty? tail))
-        ;;(println "iteration" tail)
-        (apply make tail)
-        (recur (drop 3 tail))))))
-
-(macroexpand-1 '(unwrap-body proposal -> [:person, :phone]))
-
-(defmacro test1 [name1 name2]
-  (let [make (fn [n]
-               `(defn ~(symbol (str "mc-test1-" n)) [] (println ~(str "hey " n))))]
-    ;;(make name1)
-    `(do ~(make name1)
-         ~(make name2))))
-  ;;`(do (defn ~(symbol (str "mc-test1-" name)) [] (println "hey"))))
-
-(unwrap-body proposal -> [:person, :phone])
-
 (defmacro group [name & body]
   ;; Пример
   ;; (group Agent
@@ -254,23 +217,41 @@
   ;; 3) Создает следующие функции
   ;;    (select-agent-proposal) ;; select person, phone, address, price from proposal;
   ;;    (select-agent-agents)  ;; select clients_id, proposal_id, agent from agents;
-  (let [group-name (string/lower-case name)
-        
+  (let [;; store group name in lower case
+        group-name (string/lower-case name)
+
+        ;; list of generated select functions
         select-functions (ref '(do))
-        
+
+        ;; remember group-table-field relationships
         add-table-fields (fn [sym-table arrow sym-fields & other]
                            (let [table (str sym-table)
                                  fields (map keyword sym-fields)]
+                             ;;
+                             ;; group-table-field stores:
+                             ;;   * 1-st level hash map, keys = group name,
+                             ;;                          values = 2-nd level hash map
+                             ;;   * 2-nd level hash map, keys = table name,
+                             ;;                          values = list of columns
+                             ;;
+                             ;; grout-table-field looks as follows:
+                             ;;
+                             ;; {"operator" {"clients" (:all), "proposal" (:all)},
+                             ;;  "director" {"agents" (:all), "clients" (:all), "proposal" (:all)},
+                             ;;  "agent"
+                             ;;  {"agents" (:clients_id :proposal_id :agent),
+                             ;;   "proposal" (:person :phone :address :price)}}
+                             ;;
                              (def group-table-field)
                              (if (bound? #'group-table-field)
-                               (do (println "var exists")
-                                   (def group-table-field (assoc-in group-table-field [group-name table] fields)))
-                               (do (println "creating new")
-                                   (def group-table-field {group-name {table fields}})))
+                               (def group-table-field (assoc-in group-table-field [group-name table] fields))
+                               (def group-table-field {group-name {table fields}}))
                              `(defn ~(symbol (str "select-" group-name "-" table)) []
                                 (let [~(symbol (str table "-fields-var")) ~(vec fields)]
                                   (select ~sym-table (~(symbol "fields") ~@fields))))))
-        
+
+        ;; process body by taking three pieces at a time:
+        ;; table-name 'arrow field-names
         process-body (fn [body storage]
                        (loop [args body]
                          (when (not (empty? args))
@@ -281,13 +262,7 @@
                            (recur (drop 3 args))))
                        (reverse @storage))]
     
-    (process-body body select-functions))
-  )
-
-  (group Agent
-         proposal -> [person, phone, address, price]
-         agents -> [clients_id, proposal_id, agent])
-
+    (process-body body select-functions)))
 
 (defmacro user [name & body]
   ;; Пример
@@ -297,27 +272,37 @@
   ;; и Ivanov-agents-fields-var = [:clients_id, :proposal_id, :agent]
   (let [user-name (string/lower-case name)
 
+        ;; Remember which groups the user belongs to
+        ;; I store all the information in one single global variable
+        ;; Sorry for neglecting the advice
         handle-belongs-to (fn [groups]
                             (let [group-list (map string/lower-case groups)]
+                              ;;
+                              ;; user-group is a hash-map of:
+                              ;; {user-name:string #{set of groups}}
+                              ;;
+                              ;; user-group looks as follows:
+                              ;;
+                              ;; {"sidorov" #{"agent"},
+                              ;;  "ivanov" #{"agent"},
+                              ;;  "petrov" #{"operator"},
+                              ;;  "directorov" #{"operator" "agent" "director"}}
+                              ;;
                               (def user-group)
                               (if (bound? #'user-group)
-                                (do (println "var exists")
-                                    (def user-group (assoc-in user-group [user-name] (into #{} group-list))))
-                                (do (println "creating new")
-                                    (def user-group {user-name (into #{} group-list)})))))
+                                (def user-group (assoc-in user-group [user-name] (into #{} group-list)))
+                                (def user-group {user-name (into #{} group-list)}))))
 
+        ;; process command. 'belongs-to only is supported for now
         handle-action (fn [command & group-list]
                         (if (= command 'belongs-to)
                           (handle-belongs-to group-list)
                           (println "Unknown action" (str command))))]
 
     (apply handle-action (first body))
-    `(def nop)))
-
-  (user Directorov
-        (belongs-to Operator,
-                    Agent,
-                    Director))
+    ;; this macro does not generate any code, this might be a function as well
+    ;; so we return empty list (do nothing)
+    '()))
 
 (defmacro with-user [name & body]
   ;; Пример
@@ -329,4 +314,36 @@
   ;;    proposal-fields-var и agents-fields-var.
   ;;    Таким образом, функция select, вызванная внутри with-user, получает
   ;;    доступ ко всем необходимым переменным вида <table-name>-fields-var.
-  )
+
+  (let [user-name (string/lower-case name)
+
+        ;; looks as follows:
+        ;; #{"operator" "agent" "director"}
+        user-groups (user-group user-name)
+
+        ;; looks as follows:
+        ;; ({"clients" (:all), "proposal" (:all)}
+        ;;  {"agents" (:clients_id :proposal_id :agent),
+        ;;   "proposal" (:person :phone :address :price)}
+        ;;  {"agents" (:all), "clients" (:all), "proposal" (:all)})
+        user-tables (map #(group-table-field %) user-groups)
+
+        ;; looks as follows:
+        ;; {"agents" #{:proposal_id :clients_id :agent :all},
+        ;;  "proposal" #{:phone :person :all :price :address},
+        ;;  "clients" #{:all}}
+        table-keys (reduce (fn [acc x]
+                             (reduce (fn [acc-in x-in]
+                                       (update-in acc-in
+                                                  [(first x-in)]
+                                                  clojure.set/union
+                                                  (into #{} (second x-in))))
+                                     acc
+                                     x))
+                           {}
+                           user-tables)
+        generate-let (fn [[key value]]
+                       `(~(symbol (str key "-fields-var")) ~(vec value)))]
+
+    `(let ~(vec (mapcat generate-let table-keys))
+      ~@body)))
