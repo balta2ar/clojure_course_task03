@@ -255,7 +255,9 @@
   ;;    (select-agent-proposal) ;; select person, phone, address, price from proposal;
   ;;    (select-agent-agents)  ;; select clients_id, proposal_id, agent from agents;
   (let [group-name (string/lower-case name)
+        
         select-functions (ref '(do))
+        
         add-table-fields (fn [sym-table arrow sym-fields & other]
                            (let [table (str sym-table)
                                  fields (map keyword sym-fields)]
@@ -266,16 +268,20 @@
                                (do (println "creating new")
                                    (def group-table-field {group-name {table fields}})))
                              `(defn ~(symbol (str "select-" group-name "-" table)) []
-                                (let [~(symbol (str table "-fields-var")) ~fields]
-                                  (select ~sym-table (~(symbol "fields") ~@fields))))))]
-    (loop [args body]
-      (when (not (empty? args))
-        (dosync
-         (alter select-functions
-                #(cons %2 %1)
-                (apply add-table-fields args)))
-        (recur (drop 3 args))))
-    (pprint (reverse @select-functions)))
+                                (let [~(symbol (str table "-fields-var")) ~(vec fields)]
+                                  (select ~sym-table (~(symbol "fields") ~@fields))))))
+        
+        process-body (fn [body storage]
+                       (loop [args body]
+                         (when (not (empty? args))
+                           (dosync
+                            (alter storage
+                                   #(cons %2 %1)
+                                   (apply add-table-fields args)))
+                           (recur (drop 3 args))))
+                       (reverse @storage))]
+    
+    (process-body body select-functions))
   )
 
   (group Agent
@@ -289,7 +295,29 @@
   ;;     (belongs-to Agent))
   ;; Создает переменные Ivanov-proposal-fields-var = [:person, :phone, :address, :price]
   ;; и Ivanov-agents-fields-var = [:clients_id, :proposal_id, :agent]
-  )
+  (let [user-name (string/lower-case name)
+
+        handle-belongs-to (fn [groups]
+                            (let [group-list (map string/lower-case groups)]
+                              (def user-group)
+                              (if (bound? #'user-group)
+                                (do (println "var exists")
+                                    (def user-group (assoc-in user-group [user-name] (into #{} group-list))))
+                                (do (println "creating new")
+                                    (def user-group {user-name (into #{} group-list)})))))
+
+        handle-action (fn [command & group-list]
+                        (if (= command 'belongs-to)
+                          (handle-belongs-to group-list)
+                          (println "Unknown action" (str command))))]
+
+    (apply handle-action (first body))
+    `(def nop)))
+
+  (user Directorov
+        (belongs-to Operator,
+                    Agent,
+                    Director))
 
 (defmacro with-user [name & body]
   ;; Пример
